@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DDoS Attack Detector</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: '#6366f1', dark: '#4f46e5', light: '#818cf8' },
+          },
+          animation: {
+            'spin-slow': 'spin 1.5s linear infinite',
+            'fade-in'  : 'fadeIn 0.4s ease-in-out',
+            'slide-up' : 'slideUp 0.4s ease-out',
+          },
+          keyframes: {
+            fadeIn  : { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+            slideUp : { '0%': { opacity: 0, transform: 'translateY(20px)' },
+                        '100%': { opacity: 1, transform: 'translateY(0)' } },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    .drop-active { border-color: #6366f1 !important; background: rgba(99,102,241,.08) !important; }
+    .metric-card { transition: transform .2s; }
+    .metric-card:hover { transform: translateY(-2px); }
+    .progress-bar { transition: width 0.4s ease; }
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1e1e2e; }
+    ::-webkit-scrollbar-thumb { background: #6366f1; border-radius: 3px; }
+  </style>
+</head>
+
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased">
+
+  <!-- ─── Navbar ──────────────────────────────────────────────────────────── -->
+  <nav class="border-b border-gray-800 bg-gray-900/60 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-brand flex items-center justify-center text-white font-bold text-sm">D</div>
+        <span class="font-semibold text-lg tracking-tight">DDoS Attack Detector</span>
+        <span class="text-xs text-gray-500 hidden sm:block">Bi-LSTM Neural Network</span>
+      </div>
+      <!-- model status badge -->
+      <div id="statusBadge" class="flex items-center gap-2 px-3 py-1 rounded-full bg-gray-800 text-xs font-medium">
+        <span id="statusDot" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span>
+        <span id="statusText">Checking model…</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ─── Hero ────────────────────────────────────────────────────────────── -->
+  <div class="max-w-6xl mx-auto px-4 pt-10 pb-6">
+    <h1 class="text-3xl sm:text-4xl font-bold tracking-tight mb-1">
+      Network Traffic <span class="text-brand">Analysis</span>
+    </h1>
+    <p class="text-gray-400 text-sm sm:text-base">
+      Upload a CICFlowMeter CSV and the Bi-LSTM model will classify each flow as
+      <span class="text-green-400 font-semibold">Benign</span> or
+      <span class="text-red-400 font-semibold">Attack</span>.
+    </p>
+  </div>
+
+  <!-- ─── TF Warning Banner ──────────────────────────────────────────────── -->
+  <div id="tfWarning" class="hidden max-w-6xl mx-auto px-4 mb-4">
+    <div class="bg-orange-950/60 border border-orange-700 rounded-2xl p-4 flex items-start gap-3">
+      <span class="text-2xl mt-0.5">⚠️</span>
+      <div class="text-sm">
+        <p class="font-semibold text-orange-300 mb-1">TensorFlow not available</p>
+        <p class="text-orange-400/80">
+          You are running Python <span id="tfPythonVer" class="font-mono font-bold">?</span>.
+          TensorFlow requires <strong>Python 3.10 – 3.12</strong>.
+        </p>
+        <p class="text-orange-400/60 mt-1">
+          Install Python 3.12 from
+          <a href="https://www.python.org/downloads/" target="_blank"
+             class="underline text-orange-300 hover:text-orange-200">python.org</a>,
+          create a virtual environment, then run:
+          <code class="font-mono text-orange-200 bg-orange-900/40 px-1.5 py-0.5 rounded ml-1">
+            pip install tensorflow
+          </code>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Main grid ───────────────────────────────────────────────────────── -->
+  <div class="max-w-6xl mx-auto px-4 pb-16 grid lg:grid-cols-5 gap-6">
+
+    <!-- ── Upload panel (left 2/5) ────────────────────────────────────────── -->
+    <div class="lg:col-span-2 space-y-4">
+
+      <!-- drop zone -->
+      <div id="dropZone"
+           class="border-2 border-dashed border-gray-700 rounded-2xl p-8 text-center cursor-pointer
+                  hover:border-brand/60 hover:bg-brand/5 transition-all duration-200">
+        <input type="file" id="fileInput" accept=".csv" class="hidden" />
+        <div id="dropIcon" class="text-5xl mb-3">📂</div>
+        <p class="font-semibold text-gray-200">Drop a CSV file here</p>
+        <p class="text-gray-500 text-sm mt-1">or <button onclick="document.getElementById('fileInput').click()"
+           class="text-brand underline-offset-2 underline hover:text-brand-light">browse</button></p>
+        <p id="fileName" class="mt-3 text-xs text-gray-400 hidden"></p>
+      </div>
+
+      <!-- settings card -->
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-4">
+        <h2 class="font-semibold text-sm text-gray-400 uppercase tracking-wider">Settings</h2>
+
+        <div>
+          <label class="text-sm text-gray-300 mb-1 block">Max rows to load
+            <span class="text-brand font-mono" id="maxRowsLabel">100 000</span>
+          </label>
+          <input type="range" id="maxRows" min="10000" max="500000" step="10000" value="100000"
+                 class="w-full accent-brand"
+                 oninput="document.getElementById('maxRowsLabel').textContent = (+this.value).toLocaleString()" />
+          <div class="flex justify-between text-xs text-gray-600 mt-1">
+            <span>10k</span><span>500k</span>
+          </div>
+        </div>
+
+        <button id="runBtn"
+                onclick="runInference()"
+                disabled
+                class="w-full py-2.5 rounded-xl font-semibold text-sm transition-all
+                       bg-brand/20 text-brand/40 cursor-not-allowed
+                       disabled:opacity-50">
+          Run Inference
+        </button>
+      </div>
+
+      <!-- model info card -->
+      <div id="modelInfo" class="bg-gray-900 border border-gray-800 rounded-2xl p-5 text-sm space-y-2 hidden">
+        <h2 class="font-semibold text-gray-400 uppercase tracking-wider text-xs mb-2">Model Info</h2>
+        <div class="flex justify-between"><span class="text-gray-500">Architecture</span><span class="text-gray-200">Bi-LSTM</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Parameters</span><span id="miParams" class="text-gray-200">—</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Features</span><span id="miFeatures" class="text-gray-200">—</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Sequence length</span><span id="miSeqLen" class="text-gray-200">—</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Classes</span><span id="miClasses" class="text-gray-200">—</span></div>
+      </div>
+    </div>
+
+    <!-- ── Results panel (right 3/5) ──────────────────────────────────────── -->
+    <div class="lg:col-span-3 space-y-5" id="resultsCol">
+
+      <!-- placeholder -->
+      <div id="placeholder" class="flex flex-col items-center justify-center h-64 text-center
+                                    bg-gray-900/50 border border-gray-800 rounded-2xl">
+        <div class="text-5xl mb-3 opacity-30">🔍</div>
+        <p class="text-gray-500 text-sm">Upload a CSV and click <strong>Run Inference</strong></p>
+        <p class="text-gray-600 text-xs mt-1">Results will appear here</p>
+      </div>
+
+      <!-- loading -->
+      <div id="loadingPanel" class="hidden">
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8 flex flex-col items-center gap-4 text-center">
+          <svg class="animate-spin-slow w-10 h-10 text-brand" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          <p class="font-semibold" id="loadingMsg">Uploading file…</p>
+          <div class="w-48 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div id="progressBar" class="progress-bar h-full bg-brand rounded-full w-0"></div>
+          </div>
+          <p class="text-xs text-gray-500" id="loadingDetail">Please wait</p>
+        </div>
+      </div>
+
+      <!-- results (hidden until inference done) -->
+      <div id="resultsPanel" class="hidden space-y-5 animate-slide-up">
+
+        <!-- summary header -->
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="font-bold text-lg" id="resFilename">—</h2>
+              <p class="text-gray-500 text-xs mt-0.5" id="resSubtitle">—</p>
+            </div>
+            <span id="threatBadge"
+                  class="px-3 py-1 rounded-full text-xs font-bold border"></span>
+          </div>
+
+          <!-- 3 summary cards -->
+          <div class="grid grid-cols-3 gap-3">
+            <div class="metric-card bg-gray-800/60 border border-gray-700 rounded-xl p-4 text-center">
+              <p class="text-2xl font-bold text-white" id="resTotal">—</p>
+              <p class="text-xs text-gray-400 mt-1">Sequences</p>
+            </div>
+            <div class="metric-card bg-green-900/30 border border-green-800/50 rounded-xl p-4 text-center">
+              <p class="text-2xl font-bold text-green-400" id="resBenign">—</p>
+              <p class="text-xs text-gray-400 mt-1">Benign</p>
+            </div>
+            <div class="metric-card bg-red-900/30 border border-red-800/50 rounded-xl p-4 text-center">
+              <p class="text-2xl font-bold text-red-400" id="resAttack">—</p>
+              <p class="text-xs text-gray-400 mt-1">Attack</p>
+            </div>
+          </div>
+
+          <!-- attack % bar -->
+          <div class="mt-4">
+            <div class="flex justify-between text-xs text-gray-400 mb-1">
+              <span>Benign</span><span id="attackPct">—</span>
+              <span>Attack</span>
+            </div>
+            <div class="h-2 bg-green-900/40 rounded-full overflow-hidden">
+              <div id="attackBar" class="h-full bg-red-500 rounded-full transition-all duration-700" style="width:0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- metrics row (only when file has labels) -->
+        <div id="metricsSection" class="hidden">
+          <div class="grid grid-cols-3 gap-3">
+            <div class="metric-card bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+              <p class="text-xs text-gray-500 mb-1">Accuracy</p>
+              <p class="text-2xl font-bold text-brand" id="mAccuracy">—</p>
+              <p class="text-xs text-gray-600">%</p>
+            </div>
+            <div class="metric-card bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+              <p class="text-xs text-gray-500 mb-1">F1 Score</p>
+              <p class="text-2xl font-bold text-purple-400" id="mF1">—</p>
+              <p class="text-xs text-gray-600">weighted</p>
+            </div>
+            <div class="metric-card bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+              <p class="text-xs text-gray-500 mb-1">ROC-AUC</p>
+              <p class="text-2xl font-bold text-sky-400" id="mAuc">—</p>
+              <p class="text-xs text-gray-600">score</p>
+            </div>
+          </div>
+
+          <!-- confusion matrix + classification report -->
+          <div class="grid sm:grid-cols-2 gap-4 mt-4">
+            <!-- confusion matrix image -->
+            <div class="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col items-center">
+              <h3 class="text-sm font-semibold text-gray-400 mb-3">Confusion Matrix</h3>
+              <img id="cmImage" src="" alt="Confusion Matrix"
+                   class="rounded-lg max-w-full shadow-lg" />
+            </div>
+
+            <!-- classification report -->
+            <div class="bg-gray-900 border border-gray-800 rounded-2xl p-4 overflow-auto">
+              <h3 class="text-sm font-semibold text-gray-400 mb-3">Classification Report</h3>
+              <table id="crTable" class="text-xs w-full text-right">
+                <thead>
+                  <tr class="text-gray-500 border-b border-gray-800">
+                    <th class="text-left py-1 pr-2">Class</th>
+                    <th class="py-1 px-2">Precision</th>
+                    <th class="py-1 px-2">Recall</th>
+                    <th class="py-1 px-2">F1</th>
+                    <th class="py-1 pl-2">Support</th>
+                  </tr>
+                </thead>
+                <tbody id="crBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /resultsPanel -->
+
+      <!-- error panel -->
+      <div id="errorPanel" class="hidden bg-red-950/50 border border-red-800 rounded-2xl p-6 animate-fade-in">
+        <div class="flex items-start gap-3">
+          <span class="text-2xl">⚠️</span>
+          <div>
+            <h3 class="font-semibold text-red-300 mb-1">Error</h3>
+            <pre id="errorMsg" class="text-xs text-red-400 whitespace-pre-wrap font-mono"></pre>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /resultsCol -->
+  </div><!-- /grid -->
+
+
+  <!-- ─── JavaScript ──────────────────────────────────────────────────────── -->
+  <script>
+  let selectedFile = null;
+
+  // ── status check on load ─────────────────────────────────────────────────
+  async function checkStatus() {
+    try {
+      const res  = await fetch('/api/status');
+      const data = await res.json();
+      const dot  = document.getElementById('statusDot');
+      const txt  = document.getElementById('statusText');
+
+      if (data.model_loaded) {
+        dot.className = 'w-2 h-2 rounded-full bg-green-400';
+        txt.textContent = 'Model loaded';
+        // populate model info card
+        document.getElementById('modelInfo').classList.remove('hidden');
+        document.getElementById('miParams').textContent   = data.parameters.toLocaleString();
+        document.getElementById('miFeatures').textContent = data.n_features;
+        document.getElementById('miSeqLen').textContent   = data.seq_len;
+        document.getElementById('miClasses').textContent  = data.class_names.join(' / ');
+      } else if (!data.tf_available) {
+        dot.className = 'w-2 h-2 rounded-full bg-orange-400';
+        txt.textContent = 'TensorFlow not installed';
+        // show a persistent banner
+        document.getElementById('tfWarning').classList.remove('hidden');
+        document.getElementById('tfPythonVer').textContent = data.python_version;
+      } else {
+        dot.className = 'w-2 h-2 rounded-full bg-red-400';
+        txt.textContent = 'Model not trained';
+      }
+    } catch {
+      document.getElementById('statusText').textContent = 'Server unreachable';
+    }
+  }
+
+  // ── drag-and-drop ────────────────────────────────────────────────────────
+  const dropZone = document.getElementById('dropZone');
+
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drop-active'); });
+  dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('drop-active'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drop-active');
+    const f = e.dataTransfer.files[0];
+    if (f) setFile(f);
+  });
+  dropZone.addEventListener('click', () => document.getElementById('fileInput').click());
+  document.getElementById('fileInput').addEventListener('change', e => {
+    if (e.target.files[0]) setFile(e.target.files[0]);
+  });
+
+  function setFile(f) {
+    if (!f.name.toLowerCase().endsWith('.csv')) {
+      showError('Please select a .csv file.');
+      return;
+    }
+    selectedFile = f;
+    document.getElementById('dropIcon').textContent   = '✅';
+    document.getElementById('fileName').textContent   = `${f.name}  (${(f.size/1e6).toFixed(1)} MB)`;
+    document.getElementById('fileName').classList.remove('hidden');
+
+    const btn = document.getElementById('runBtn');
+    btn.disabled = false;
+    btn.className = btn.className
+      .replace('bg-brand/20 text-brand/40 cursor-not-allowed disabled:opacity-50', '')
+      + ' bg-brand hover:bg-brand-dark text-white cursor-pointer shadow-lg shadow-brand/20';
+
+    // clear previous results
+    hideAll();
+    document.getElementById('placeholder').classList.remove('hidden');
+  }
+
+  // ── run inference ────────────────────────────────────────────────────────
+  async function runInference() {
+    if (!selectedFile) return;
+
+    hideAll();
+    showLoading('Uploading file…', 'Processing your CSV…', 20);
+
+    const fd = new FormData();
+    fd.append('file',     selectedFile);
+    fd.append('max_rows', document.getElementById('maxRows').value);
+
+    // fake progress ticks while waiting
+    let pct = 20;
+    const ticker = setInterval(() => {
+      pct = Math.min(pct + 5, 85);
+      setProgress(pct);
+      if (pct >= 50) document.getElementById('loadingMsg').textContent = 'Running inference…';
+      if (pct >= 75) document.getElementById('loadingMsg').textContent = 'Computing metrics…';
+    }, 600);
+
+    try {
+      const res = await fetch('/api/predict', { method: 'POST', body: fd });
+      clearInterval(ticker);
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || res.statusText);
+      }
+
+      setProgress(100);
+      await new Promise(r => setTimeout(r, 300));   // brief pause for UX
+
+      const data = await res.json();
+      renderResults(data);
+    } catch (err) {
+      clearInterval(ticker);
+      showError(err.message);
+    }
+  }
+
+  // ── render results ───────────────────────────────────────────────────────
+  function renderResults(d) {
+    hideAll();
+
+    const p    = d.predictions;
+    const pct  = p.attack_percentage;
+
+    document.getElementById('resFilename').textContent =
+      d.filename || 'Unknown';
+    document.getElementById('resSubtitle').textContent =
+      `${(d.total_rows_loaded||0).toLocaleString()} rows loaded • ` +
+      `${(d.sequences_evaluated||0).toLocaleString()} sequences evaluated`;
+
+    document.getElementById('resTotal').textContent  = (d.sequences_evaluated||0).toLocaleString();
+    document.getElementById('resBenign').textContent = (p.benign_count||0).toLocaleString();
+    document.getElementById('resAttack').textContent = (p.attack_count||0).toLocaleString();
+    document.getElementById('attackPct').textContent = pct + '%';
+
+    setTimeout(() => {
+      document.getElementById('attackBar').style.width = pct + '%';
+    }, 100);
+
+    // threat badge
+    const badge = document.getElementById('threatBadge');
+    if (pct > 50) {
+      badge.textContent = '🔴 High Threat';
+      badge.className   = 'px-3 py-1 rounded-full text-xs font-bold border bg-red-900/40 border-red-700 text-red-300';
+    } else if (pct > 10) {
+      badge.textContent = '🟡 Medium Threat';
+      badge.className   = 'px-3 py-1 rounded-full text-xs font-bold border bg-yellow-900/40 border-yellow-700 text-yellow-300';
+    } else {
+      badge.textContent = '🟢 Low Threat';
+      badge.className   = 'px-3 py-1 rounded-full text-xs font-bold border bg-green-900/40 border-green-700 text-green-300';
+    }
+
+    // metrics section
+    if (d.metrics) {
+      document.getElementById('mAccuracy').textContent = d.metrics.accuracy;
+      document.getElementById('mF1').textContent       = d.metrics.f1_score;
+      document.getElementById('mAuc').textContent      = d.metrics.roc_auc !== null ?
+                                                          d.metrics.roc_auc : 'N/A';
+
+      // confusion matrix image
+      if (d.confusion_matrix?.image) {
+        document.getElementById('cmImage').src = d.confusion_matrix.image;
+      }
+
+      // classification report table
+      const body   = document.getElementById('crBody');
+      body.innerHTML = '';
+      const rpt    = d.metrics.classification_report;
+      const skipKeys = new Set(['accuracy', 'macro avg', 'weighted avg']);
+      // per-class rows
+      ['Benign','Attack'].forEach(cls => {
+        const row = rpt[cls] || rpt[cls.toLowerCase()] || rpt[Object.keys(rpt).find(k=>!skipKeys.has(k))];
+        if (!row) return;
+        body.innerHTML += classRow(cls, row);
+      });
+      // fallback: any key that isn't a summary
+      Object.entries(rpt).forEach(([k, v]) => {
+        if (skipKeys.has(k) || k === 'Benign' || k === 'Attack') return;
+        if (typeof v === 'object' && v.precision !== undefined) {
+          body.innerHTML += classRow(k, v);
+        }
+      });
+      // averages
+      ['macro avg','weighted avg'].forEach(k => {
+        if (rpt[k]) body.innerHTML += avgRow(k, rpt[k]);
+      });
+
+      document.getElementById('metricsSection').classList.remove('hidden');
+    }
+
+    document.getElementById('resultsPanel').classList.remove('hidden');
+  }
+
+  function classRow(label, r) {
+    return `<tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
+      <td class="text-left py-1.5 pr-2 text-gray-200 font-medium">${label}</td>
+      <td class="py-1.5 px-2 text-blue-300">${r.precision.toFixed(4)}</td>
+      <td class="py-1.5 px-2 text-green-300">${r.recall.toFixed(4)}</td>
+      <td class="py-1.5 px-2 text-purple-300">${r['f1-score'].toFixed(4)}</td>
+      <td class="py-1.5 pl-2 text-gray-400">${(r.support||0).toLocaleString()}</td>
+    </tr>`;
+  }
+  function avgRow(label, r) {
+    return `<tr class="text-gray-500 border-t border-gray-700">
+      <td class="text-left py-1.5 pr-2 italic">${label}</td>
+      <td class="py-1.5 px-2">${r.precision.toFixed(4)}</td>
+      <td class="py-1.5 px-2">${r.recall.toFixed(4)}</td>
+      <td class="py-1.5 px-2">${r['f1-score'].toFixed(4)}</td>
+      <td class="py-1.5 pl-2">${(r.support||0).toLocaleString()}</td>
+    </tr>`;
+  }
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+  function hideAll() {
+    ['placeholder','loadingPanel','resultsPanel','errorPanel'].forEach(id =>
+      document.getElementById(id).classList.add('hidden')
+    );
+    document.getElementById('metricsSection').classList.add('hidden');
+  }
+
+  function showLoading(msg, detail, pct) {
+    document.getElementById('loadingMsg').textContent    = msg;
+    document.getElementById('loadingDetail').textContent = detail;
+    document.getElementById('loadingPanel').classList.remove('hidden');
+    setProgress(pct);
+  }
+
+  function setProgress(pct) {
+    document.getElementById('progressBar').style.width = pct + '%';
+  }
+
+  function showError(msg) {
+    hideAll();
+    document.getElementById('errorMsg').textContent = msg;
+    document.getElementById('errorPanel').classList.remove('hidden');
+  }
+
+  // ── init ─────────────────────────────────────────────────────────────────
+  checkStatus();
+  </script>
+</body>
+</html>
