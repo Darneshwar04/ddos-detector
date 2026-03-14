@@ -84,8 +84,7 @@ The model expects **CICFlowMeter** format CSV files with **66 network flow featu
 ### Supported Datasets
 - ✅ **Archive (1)** — CIC-IDS-2018 (10 CSV files)
 - ✅ **Archive (2)** — CIC-DDoS-2019 (18 CSV files)
-- ⚠️ **Archive (3)** — Raw packet data (not supported)
-- ❌ **Archive (4)** — Different data distribution (use with caution)
+- ✅ use the Test_file for evaluating the model!
 
 ### Features (Sample)
 ```
